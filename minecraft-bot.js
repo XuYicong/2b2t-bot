@@ -2,7 +2,7 @@ const mineflayer = require('mineflayer')
 const fs = require('fs')
 const util = require('util')
 const { mineflayer: mineflayerViewer } = require('prismarine-viewer')
-const { time } = require('console')
+const { time, count } = require('console')
 const { Item } = require('prismarine-item')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const { Physics, PlayerState } = require('prismarine-physics')
@@ -13,9 +13,9 @@ const { Physics, PlayerState } = require('prismarine-physics')
 //   console.log('Usage : node gps.js <host> <port> [<name>] [<password>]')
 //   process.exit(1)
 // }
-const password = ''
+const server_hostname = '2b2t.xin'
 const bot = mineflayer.createBot({
-  host: '2b2t.xin',
+  host: server_hostname,
 //   port: parseInt(process.argv[3]),
   username: 'Xyct',
   version: '1.12.2', 
@@ -45,7 +45,7 @@ function enterWorld(){
             if(!isEnteredWorld()){
                 queue()
             }
-        }, 1000)
+        }, 2500)
     }
     bot.on("heldItemChanged", useCompass)
     if(compass != null){
@@ -66,26 +66,52 @@ function resetPhysics(){
     var physics = bot.physics
     physics.gravity = 0.08
 }
+async function antiStuck(){
+    // 服务器不接受我们的移动，但是重新登录会好
+    // 尝试往各个方向移动
+    // 尝试转动视角
+    targetX = - targetX
+    targetZ = - targetZ
+    wander()
+    // await delay(1000)
+    // var physics = bot.physics
+    // // physics.gravity = 0.04
+    // const world = { getBlock: (pos) => { return bot.blockAt(pos, false) } }
+    // var controlState = {
+    //     forward: false,
+    //     back: false,
+    //     left: false,
+    //     right: false,
+    //     jump: false,
+    //     sneak: false,
+    //     sprint: false,
+    //     placeholder: false
+    // }
+    // // simulate one tick each time
+    // for(var decorate of ['placeholder', 'jump', 'sneak']){
+    //     controlState[decorate] = true
+    //     for(var direction of ['placeholder', 'left','right',]){
+    //         controlState[direction] = true
+    //         for(var op of ['placeholder', 'forward', 'back',]){
+    //             if(op == decorate) continue
+    //             controlState[op] = true
+    //             var state = new PlayerState(bot, controlState)
+    //             for(var i=0; i<1; i+=1){
+    //                 await delay(50)
+    //                 // const yaw = bot.entity.yaw
+    //                 // bot.look(yaw, 0.1)
+    //                 physics.simulatePlayer(state, world).apply(bot)
+    //                 // await delay(100)
+    //             }
+    //             controlState[op] = false
+    //         }
+    //         controlState[direction] = false
+    //     }
+    //     controlState[decorate] = false
+    // }
+}
 function emergencyEscape(){
-    bot.once('path_stop',()=> setTimeout(()=>{
-        var physics = bot.physics
-        // physics.gravity = 0.04
-        const world = { getBlock: (pos) => { return bot.blockAt(pos, false) } }
-        const controlState = {
-            forward: false,
-            back: true,
-            left: false,
-            right: false,
-            jump: true,
-            sprint: false,
-            sneak: false
-        }
-        var state = new PlayerState(bot, controlState)
-        // simulate one tick each time
-        for(var i=0; i<20; i+=1){
-            physics.simulatePlayer(state, world).apply(bot)
-        }
-    },100))
+    bot.once('path_stop',antiStuck)
     bot.pathfinder.stop()
 }
 
@@ -124,6 +150,7 @@ function afterEnteredWorld(){
     bot.on("path_reset", (reason)=>{
         console.log("Path reset:"+reason)
         if(reason.includes('stuck')){
+            console.log('当前坐标：'+bot.entity.position)
             stuckCount += 1
             if(stuckCount > 2){
                 // bot.pathfinder.stop()
@@ -155,6 +182,7 @@ function queue(){
         }
         // if (username === bot.username) return
         if (message.includes('A.')){
+            // TODO: remember right answers
             bot.chat('A')
         }
         console.log(message)
@@ -166,15 +194,17 @@ const collectBlockPlugin = require('mineflayer-collectblock').plugin
 bot.loadPlugin(collectBlockPlugin)
 const defaultMove = new Movements(bot)
 defaultMove.allowSprinting = false
+// pathfinder have trouble climbing
+defaultMove.climbables.clear()
 bot.collectBlock.movements = defaultMove
 bot.pathfinder.setMovements(defaultMove)
 bot.pathfinder.thinkTimeout = 10345
-bot.physics.playerHalfWidth = 0.39
-bot.physics.playerSpeed = 0.01
-bot.physics.playerHeight = 1.78
+// bot.physics.playerHalfWidth = 0.39
+bot.physics.playerSpeed = 0.1
+// bot.physics.playerHeight = 1.78
 bot.physics.yawSpeed = 2
 bot.physics.pitchSpeed = 2
-bot.physics.gravity = 0.07
+// bot.physics.gravity = 0.07
 var targetX = 233333
 var targetZ = -144200
 const wander = ()=>{
@@ -183,7 +213,7 @@ const wander = ()=>{
             // if(targetX<0){
             //     targetZ = -targetZ
             // }
-            bot.pathfinder.setGoal(new goals.GoalBlock(targetX, 100, targetZ))
+            bot.pathfinder.setGoal(new goals.GoalBlock(targetX, 250, targetZ))
         }
 
 function delay(t){
@@ -285,17 +315,28 @@ function isNatural(){
         count: 1,
         maxDistance: 64
     })
+    var water = bot.findBlocks({
+        matching: (block)=>{
+            for(var word of ['ice', 'water']){
+                if(block.name.includes(word)){
+                    return true
+                }
+            }
+        },
+        count: 1,
+        maxDistance: 64
+    })
     // console.log(targetCoords)
-    return targetCoords.length > 10 && ender_chest.length > 0
+    return targetCoords.length > 10 && ender_chest.length > 0 && water.length > 0
 }
 function isInDeathZone(){
     var pos = bot.entity.position
-    if(Math.abs(pos.x) + Math.abs(pos.z) < 1000) return true
+    if(Math.abs(pos.x) + Math.abs(pos.z) < 1500) return true
     return false
 }
 async function switchDimension(){
     // 找到并使用下界门
-    await collectBlocks(['portal'])
+    await collectBlocks(['portal'], true)
     console.log("I should have reached nether portal?")
     // setTimeout(wander, 3000)
 }
@@ -308,7 +349,7 @@ async function travelViaNether(){
     if(dimension.includes('nether') ){
         var pos = bot.entity.position
         const mod = Math.abs(pos.x) + Math.abs(pos.z)
-        if(mod > 400){
+        if(mod > 300){
             escape_state = 1
         }
         if(mod < 120){
@@ -320,7 +361,7 @@ async function travelViaNether(){
             wander()
         }
     }else{
-        switchDimension()
+        await switchDimension()
     }
 }
 function inventoryHasItem(word){
@@ -343,17 +384,6 @@ async function farm(){
         }
     }
 }
-async function refillStonePickaxe(){
-    var inventory = bot.inventory
-    var stone_pickaxe = inventory.findInventoryItem('stone_pickaxe')
-    if(stone_pickaxe == null){
-        // 找木pickaxe
-        var pickaxe = inventory.findInventoryItem('wooden_pickaxe')
-    }
-}
-async function getTasks(){
-
-}
 var craftingTableBlock = null
 async function findCraftingTableBlock(){
     if(craftingTableBlock != null) return craftingTableBlock
@@ -366,65 +396,157 @@ async function findCraftingTableBlock(){
     })
     return craftingTableBlock
 }
-const itemIndex = {
-    'crafting_table': 58
-}
-// return: success: 任务是否成功
+// return: 任务结果
 async function tryCraftItem(task, curIndex){
+    if(task.count <= 0) return TASK_COMPLETED
     // for now, 默认所有crafting task都需要工作台
     // 除了工作台自身
-    var craftingTable = findCraftingTableBlock()
+    var craftingTable = await findCraftingTableBlock()
     if(craftingTable == null && task.target != itemIndex['crafting_table']){
+        console.log('缺少工作台')
         task_stack.push(task)
         task_stack.push(new Task(itemIndex['crafting_table'], curIndex, 1))
+        return TASK_IN_PROGRESS
+    }
+    var recipes = bot.recipesFor(task.target, null, craftingTable)
+    // 能够让产物增加的菜谱的数量
+    // var hasIncrementingRecipe = false
+    function isIncrementingRecipe(recipe){
+        const id = recipe.result.id
+        for(var item of recipe.delta){
+            if(id == item.id && item.count>0) return true
+        }
         return false
     }
-    var recipes = bot.recipesFor(task.target, craftingTable=craftingTable)
-    if(recipes.length <= 0){
-        // 合成不了咯，请先收集更多材料吧
-        task_stack.push(task)
-        recipes = bot.recipesAll(task.target, craftingTable=craftingTableBlock)
+    // for(const recipe of recipes){
+    //     if(isIncrementingRecipe(recipe)){
+    //         console.log(recipe)
+    //         hasIncrementingRecipe = true
+    //         break
+    //     }
+    // }
+    // 如果有crafting table，就走过去
+    if(craftingTable != null){
+        console.log("前往工作台 at "+craftingTable.position)
+        const noPath = await tryGotoBlockPosition(
+            bot.pathfinder.goto(new goals.GoalLookAtBlock(
+            craftingTable.position, bot.world)))
+    }
+    var success = false
+    var left = task.count
+    var before
+    do{
+        before = left
         for(const recipe of recipes){
+            if(!isIncrementingRecipe(recipe)) continue
+            try{
+                console.log('尝试合成'+task.target)
+                console.log(recipe.delta)
+                await bot.craft(recipe, 1, craftingTable)
+                left -= recipe.result.count
+                if(left <= 0){
+                    console.log('crafting item '+ task.target+' 成功')
+                    success = true
+                    break
+                }
+            }catch(err){
+                console.log(err)
+                console.log('a recipe failed to craft')
+            }
+        }
+        // 反复尝试所有recipe，直到再也做不了一次
+    }while(before > left && !success)
+    task.count = left
+    if(success) return TASK_COMPLETED
+    if(!success){
+        console.log('合成不了，先收集更多材料吧')
+        task_stack.push(task)
+        recipes = bot.recipesAll(task.target, null, craftingTable)
+        for(const recipe of recipes){
+            if(!isIncrementingRecipe(recipe)) continue
             // 把每个任务加进任务栈。
             // 因为是“或”的关系，所以父任务都是parent
             // 但菜谱之中的各项item是“且”的关系的，父任务应该是其sibling
             var sibling = curIndex
-            // TODO: 向上取整，而不是+1
-            // 我也不知道这是整数还是小数，反正先+1看看
-            const times = task.count / recipe.result.count +1
-            for(const recipeItem of recipe.ingredients){
+            // 浮点除法
+            const times = task.count / recipe.result.count
+            for(var recipeItem of recipe.delta){
+                if(recipeItem.count > 0) continue
                 // TODO: 暂时不考虑metadata————直到找到能测试的地方
                 const tmp = task_stack.length
-                // TODO: 暂时不考虑背包中已有的材料。愿我们的背包够大
-                task_stack.push(new Task(recipeItem.id, sibling, recipeItem.count * times))
+                // 考虑背包中如果有，看数量是否足够
+                // 如果不够，就减去背包中该物品的数量
+                // 如果够，跳过
+                var numItems = Math.ceil(-recipeItem.count * times) 
+                const existing = bot.inventory.count(recipeItem.id)
+                if(existing >= numItems) continue
+                numItems -= existing
+                console.log('New task pushed: '+numItems+'个'+recipeItem.id)
+                task_stack.push(new Task(recipeItem.id, sibling, numItems))
                 sibling = tmp
             }
         }
-        return false
+        return TASK_IN_PROGRESS
     }
-    // 可以合成，let's do it
-    for(const recipe of recipes){
-        // TODO: 如果有crafting table，就走过去
-        // 然后进行craft。依次尝试所有recipe，成功一个就break
-    }
-    return true
+    return TASK_IN_PROGRESS
 }
+const TASK_IN_PROGRESS = 0
+const TASK_COMPLETED = 1
+const TASK_FAILED = 2
 async function executeTasks(){
     while(task_stack.length > 0){
         const task = task_stack.pop()
-        console.log('executing task '+ task.type +' '+task.target)
+        console.log('executing task '+ task.count +'个'+task.target)
+        // TODO: 记录子任务成功情况
         task.numberOfExecution += 1
-        if(task.numberOfExecution > 2){
-            console.log('任务失败')
-            break
+        if(task.numberOfExecution > 4){
+            console.log('任务卡住，已放弃')
+            continue
         }
         const curIndex = task_stack.length
+        console.log('任务序号：'+curIndex)
         // task.type == mining
-        // TODO: 检查所有可以掉落该item的block，尝试挖掘每一个
+        // 检查所有可以掉落该item的block，尝试挖掘每一个
+        console.log("检索方块中")
+        // TODO: 考虑挖掘失败的情况
+        // 如何判断挖掘数量？挖掘前数箱子里的个数，挖掘后再数。
+        const before = bot.inventory.count(task.target)
+        await doCollectBlocks({
+            matching: (block)=>{
+                const drops = block.drops
+                if(drops == undefined) return false
+                // I'm just trying to get the ID!
+                for(const drop of drops){
+                    if(drop.drop == undefined){
+                        if(drop == task.target) return true
+                        continue
+                    }
+                    const id = drop.drop.id
+                    if(id == undefined){
+                        if(drop.drop == task.target) return true
+                        continue
+                    }
+                    if(id == task.target) return true
+                }
+                return false
+            },
+            // TODO: 一个方块可能掉落多个，或概率掉落物品
+            // 如燧石，红石，下界荧光块等。暂时假设每个方块稳定掉落一个
+            count: task.count,
+            maxDistance: 228
+        })
+        await delay(1000)
+        const after = bot.inventory.count(task.target)
+        const numMined = after - before
         // 后面可能还有炉子等方式，暂时不考虑
-        // TODO: 更新task的剩余数量
-        const success = await tryCraftItem(task, curIndex)
-        if(!success) continue
+        // 更新task的剩余数量
+        task.count -= numMined
+        console.log('挖掘了'+numMined+'个，剩余应合成量：'+task.count)
+        const result = await tryCraftItem(task, curIndex)
+        if(result == TASK_IN_PROGRESS) {
+            console.log('crafting 执行子任务')
+            continue
+        }
         // 现在任务成功了。把父任务的后代任务全部删了。
         const targetLength = task.parent +1
         while(task_stack.length > targetLength){
@@ -443,10 +565,59 @@ class Task{
 // 任务树，任何一个分支成功都算成功
 // 任务栈记录任务的依赖关系
 var task_stack = [] // 后来者为先到者的后代
-// 考虑自己死后，如何东山再起
-async function sustain(){
+const itemIndex = {
+    'crafting_table': 58,
+    'wooden_pickaxe': 270,
+    'stone_pickaxe': 274,
+    'dirt': 3
+}
+// TODO: 任务搜索中加入best_harvet_tool，自动获取挖掘工具
+const sustainItems = {
+    // 'wooden_pickaxe': 0,
+    // 0表示现在一个都没有，希望无中生有
+    'stone_pickaxe': 0,
+    'dirt': 32
+}
+async function getTasksFromEnderChest(chest){
+    for(const sustainItem in sustainItems){
+        // 对于每个指定物品，数总数量
+        const numTaken = sustainItems[sustainItem]
+        var expected = numTaken * 4
+        if(expected <= 0) expected = 1
+        const itemID = itemIndex[sustainItem]
+        const containerBefore = chest.containerCount(itemID)
+        const inventoryBefore = chest.count(itemID)
+        const existing = inventoryBefore + containerBefore
+        // 缺好多，加入任务
+        if(existing < expected){
+            task_stack.push(new Task(itemID, -1, expected - existing))
+        }
+        // 使得背包里数量达标
+        // 数背包里数量
+        console.log(
+            '箱子里有'+containerBefore+'个，背包里有'+inventoryBefore+'个，应该有'+numTaken+'个')
+        // TODO: 假设两边的空间都总是足够
+        // 若多，放进去
+        if(inventoryBefore > numTaken){
+            console.log('应该放进去'+(inventoryBefore - numTaken)+'个')
+            await chest.deposit(itemID, null, inventoryBefore - numTaken)
+        }else if (inventoryBefore < numTaken){
+            // 若少，拿出来
+            console.log('应该拿出来'+(numTaken - inventoryBefore)+'个')
+            await chest.withdraw(itemID, null, numTaken - inventoryBefore)
+        }else{
+            console.log('不拿也不放')
+        }
+    }
+}
+async function getTasks(){
     // 若任务栈为空，前往末影箱重新分配材料
     // 分配后检查末影箱里缺哪些，加入任务栈
+    // 材料基于inventory里该有的量，箱子里是inventory的三倍
+    await getEnderChest(getTasksFromEnderChest)
+}
+async function sustain(){
+    // 考虑自己死后，如何东山再起
     if(task_stack.length <= 0){
         await getTasks()
     }else{
@@ -457,20 +628,20 @@ async function develop() {
     await collectDroppedItems()
     await sustain()
     await farm()
-    await collectBlocks([
-        'wood',
-        'log',
-        'jungle', 'oak', 'spruce', 'birch', 'acacia', 
-        // 'iron',
-        'plank', 
-        // 'sand', 
-        // 'leaves', 
-        'wool', 
-        // 'flower', 'mushroom'
-        // , 'stone'
-        // , 'grass'
-    // , 'dirt'
-    ])
+    // await collectBlocks([
+    //     'wood',
+    //     'log',
+    //     'jungle', 'oak', 'spruce', 'birch', 'acacia', 
+    //     // 'iron',
+    //     'plank', 
+    //     // 'sand', 
+    //     // 'leaves', 
+    //     'wool', 
+    //     // 'flower', 'mushroom'
+    //     // , 'stone'
+    //     // , 'grass'
+    // // , 'dirt'
+    // ])
 }
 async function loop(){
     console.log("HP: " + bot.health+"/20, food: "+bot.food+'/20')
@@ -491,22 +662,8 @@ async function escape(){
         wander()
     }
 }
-async function collectBlocks(words){
-    var targetCoords = bot.findBlocks({
-        matching: (block)=>{
-            for(var index in words){
-                const word = words[index]
-                    // console.log(word+", "+block.name)
-                if(block.name.includes(word)){
-                    // console.log(block.name)
-                    return true
-                }
-            }
-            return false
-        },
-        count: 24,
-        maxDistance: 128
-    })
+async function doCollectBlocks(options, goal = null){
+    var targetCoords = bot.findBlocks(options)
     var blockList = []
     for(var index in targetCoords){
         const wood = bot.blockAt(targetCoords[index])
@@ -516,11 +673,45 @@ async function collectBlocks(words){
         blockList.push(wood)
         // const wood = woods[0]
     }
+    var goal_reached = false
+    if(goal != null){
+        bot.once('goal_reached',(goal)=>{
+            goal_reached = true
+        })
+    }
     for(var block of blockList){
         const p = block.position
         console.log('Collecting block: '+ p + ' '+ block.name)
+        if(goal != null){
+            await tryGotoBlockPosition(bot.pathfinder.goto(
+                new goals.GoalBlock(p.x, p.y, p.z)))
+            // await delay(3000)
+            if(goal_reached) break
+        }
     }
-    await tryGotoBlockPosition(bot.collectBlock.collect(blockList))
+    if(goal == null){
+        await tryGotoBlockPosition(bot.collectBlock.collect(blockList))
+    } else if(!goal_reached){
+        wander()
+    }
+    return blockList.length
+}
+async function collectBlocks(words, goal = null){
+    await doCollectBlocks({
+        matching: (block)=>{
+            for(var index in words){
+                const word = words[index]
+                const p = block.position
+                if(block.name.includes(word)){
+                    // console.log(block.name)
+                    return true
+                }
+            }
+            return false
+        },
+        count: 32,
+        maxDistance: 128
+    }, goal)
 }
 
 bot.on('chat', (username, message) => {
@@ -530,7 +721,11 @@ bot.on('chat', (username, message) => {
   })
 bot.once('spawn', () => {
     // console.log('spawned')
-    mineflayerViewer(bot, { port: 80, firstPerson: true })
+    var port = 80
+    if(server_hostname.includes('icu')){
+        port = 8080
+    }
+    mineflayerViewer(bot, { port: port, firstPerson: true })
     enterWorld()
 })
 bot.on('kicked', console.log)
