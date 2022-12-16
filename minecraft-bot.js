@@ -14,14 +14,18 @@ const { Physics, PlayerState } = require('prismarine-physics')
 //   process.exit(1)
 // }
 const server_hostname = '2b2t.xin'
-const bot = mineflayer.createBot({
-  host: server_hostname,
-//   port: parseInt(process.argv[3]),
-  username: 'Xyct',
-  version: '1.12.2', 
-  hideErrors: false,
-  auth: 'microsoft'
-})
+var bot
+function login(){
+    bot = mineflayer.createBot({
+        host: server_hostname,
+        //   port: parseInt(process.argv[3]),
+        username: 'Xyct',
+        version: '1.12.2', 
+        hideErrors: false,
+        auth: 'microsoft'
+    })
+}
+login()
 // console.log(bot)
 function enterWorld(){
     var inventory = bot.inventory
@@ -67,12 +71,17 @@ function resetPhysics(){
     physics.gravity = 0.08
 }
 async function antiStuck(){
+    // 螺旋出去
+    // console.log(targetX > 0 ^ targetZ > 0)
+    if(targetX > 0 ^ targetZ > 0){
+        targetZ = - targetZ
+    }else{
+        targetX = - targetX
+    }
+    wander()
     // 服务器不接受我们的移动，但是重新登录会好
     // 尝试往各个方向移动
     // 尝试转动视角
-    targetX = - targetX
-    targetZ = - targetZ
-    wander()
     // await delay(1000)
     // var physics = bot.physics
     // // physics.gravity = 0.04
@@ -116,6 +125,15 @@ function emergencyEscape(){
 }
 
 function afterEnteredWorld(){
+    bot.inventory.on("updateSlot", (slot, oldItem, newItem) =>{
+        const none = '没有'
+        var oldItemStr, newItemStr
+        if(oldItem == null) oldItemStr = none
+        else oldItemStr = oldItem.count+' 个 '+oldItem.displayName
+        if(newItem == null) newItemStr = none
+        else newItemStr = newItem.count+' 个 '+newItem.displayName
+        console.log('inventory slot '+slot+' changed from '+oldItemStr+' to '+newItemStr)
+    })
     bot.on('goal_reached',()=>{
         console.log("Goal reached")
     })
@@ -125,9 +143,13 @@ function afterEnteredWorld(){
         bot.viewer.drawLine(1, path)
         const s = status.status
         if(s!='partial') console.log("path_update: "+s)
-        if(s.includes('noPath')){
+        if(s.includes('noPath') || s.includes('timeout')){
             noPathCount += 1
             if(noPathCount > 5){
+                if(noPathCount > 8){
+                    // 想堵死我？搞笑
+                    bot.chat('/suicide')
+                }
                 emergencyEscape()
                 return
             }
@@ -141,7 +163,7 @@ function afterEnteredWorld(){
             if(s!='partial'){
                 defaultMove.maxDropDown = 4
             }
-        } 
+        }
     })
     // bot.on('goal_updated',()=>{
     //     console.log("goal_updated")
@@ -164,7 +186,7 @@ function afterEnteredWorld(){
             }
         }
         if(reason.includes('place')){
-            defaultMove.allow1by1towers = !defaultMove.allow1by1towers
+            // defaultMove.allow1by1towers = !defaultMove.allow1by1towers
         }
         stuckCount = 0
     })
@@ -196,6 +218,7 @@ const defaultMove = new Movements(bot)
 defaultMove.allowSprinting = false
 // pathfinder have trouble climbing
 defaultMove.climbables.clear()
+defaultMove.allow1by1towers = false
 bot.collectBlock.movements = defaultMove
 bot.pathfinder.setMovements(defaultMove)
 bot.pathfinder.thinkTimeout = 10345
@@ -213,27 +236,27 @@ const wander = ()=>{
             // if(targetX<0){
             //     targetZ = -targetZ
             // }
-            bot.pathfinder.setGoal(new goals.GoalBlock(targetX, 250, targetZ))
+            bot.pathfinder.setGoal(new goals.GoalBlock(targetX, 130, targetZ))
         }
 
 function delay(t){
     return new Promise(resolve => setTimeout(resolve, t))
-}
-function countItems(container, itemsList){
-
 }
 async function depositAll(chest){
     for (const item of bot.inventory.items()) {
         await chest.deposit(item.type, item.metadata, item.count)
     }
 }
-var invalid_enderchest_coords = []
+var unavailable_block_coords = []
+function isBlockAvailable(block){
+    return unavailable_block_coords.findIndex((pos, index, obj) =>{
+                    return pos.x == block.x &&pos.y == block.y &&pos.z == block.z
+                }) == -1
+}
 function isAvailableEnderChest(block){
     return block.name.includes('ender_chest')
                 // && !invalid_enderchest_coords.includes(block)
-                && invalid_enderchest_coords.findIndex((pos, index, obj) =>{
-                    return pos.x == block.x &&pos.y == block.y &&pos.z == block.z
-                }) == -1
+                && isBlockAvailable(block)
 }
 async function getEnderChest(callback) {
     var enderChestsCoords = bot.findBlocks({matching: (block)=>{
@@ -250,23 +273,24 @@ async function getEnderChest(callback) {
 
         console.log('Reached '+ enderChest.name+' at '+enderChest.position)
         var opened = false
+        var result = 'Chest operation timeout'
         bot.openContainer(enderChest).then((chest)=>{
             opened = true
-            callback(chest)
+            result = callback(chest)
         })
         await delay(3000)
         if(!opened){
             console.log("Open chest timeout")
-            invalid_enderchest_coords.push(enderChest.position)
-            console.log(invalid_enderchest_coords)
+            unavailable_block_coords.push(enderChest.position)
+            console.log(unavailable_block_coords)
             continue
         }
-        break
+        return result
     }
 }
 async function emptyInventory(){
     var items = bot.inventory.items()
-    if(items.length <= 10) return
+    if(items.length <= 30) return
     console.log('Emptying inventory of '+ items.length + ' items')
     await getEnderChest(depositAll)
 }
@@ -296,7 +320,7 @@ async function collectDroppedItems(){
     }
 }
 function isNatural(){
-    var targetCoords = bot.findBlocks({
+    var leaves = bot.findBlocks({
         matching: (block)=>{
             const word = 'leave'
             if(block.name.includes(word)){
@@ -327,7 +351,11 @@ function isNatural(){
         maxDistance: 64
     })
     // console.log(targetCoords)
-    return targetCoords.length > 10 && ender_chest.length > 0 && water.length > 0
+    const canSettle = 
+    leaves.length > 10 && 
+    ender_chest.length > 0 
+    && water.length > 0
+    return canSettle
 }
 function isInDeathZone(){
     var pos = bot.entity.position
@@ -396,29 +424,53 @@ async function findCraftingTableBlock(){
     })
     return craftingTableBlock
 }
+function countInventory(itemID){
+    var count = 0
+    for(var item of bot.inventory.items()){
+        if(item.type == itemID) count += item.count
+    }
+    return count
+}
 // return: 任务结果
-async function tryCraftItem(task, curIndex){
+async function tryCraftItem(task, curIndex, numTargetLacking){
     if(task.count <= 0) return TASK_COMPLETED
     // for now, 默认所有crafting task都需要工作台
     // 除了工作台自身
     var craftingTable = await findCraftingTableBlock()
     if(craftingTable == null && task.target != itemIndex['crafting_table']){
         console.log('缺少工作台')
-        task_stack.push(task)
-        task_stack.push(new Task(itemIndex['crafting_table'], curIndex, 1))
+        task_stack.push(new Task(itemIndex['crafting_table'], curIndex, curIndex, 1, false))
         return TASK_IN_PROGRESS
     }
-    var recipes = bot.recipesFor(task.target, null, craftingTable)
-    // 能够让产物增加的菜谱的数量
-    // var hasIncrementingRecipe = false
+    // 此处手动控制数量，便于后续衔接熔炉等其他方式
+    var available_recipes = bot.recipesFor(task.target, null, 1, craftingTable)
     function isIncrementingRecipe(recipe){
-        const id = recipe.result.id
-        for(var item of recipe.delta){
-            if(id == item.id && item.count>0) return true
+        // 判断食谱产物数量是增加的
+        // 考虑到了皮革修复鞘翅
+        const resultingItemId = recipe.result.id
+        var productIncrements = false
+        for(var recipeItem of recipe.delta){
+            if(recipeItem.count > 0){
+                if(recipeItem.id == resultingItemId){
+                    productIncrements = true
+                }
+                continue
+            }
+            // 判断任何消耗的材料是否在usedBy树链里面。如果在，那么这个原料无法通过这个食谱获得。
+            var itemUserTask = task
+            var previousItemUserTask
+            do{
+                if(itemUserTask.target == recipeItem.id){
+                    return false
+                }
+                previousItemUserTask = itemUserTask
+                itemUserTask = task_stack[itemUserTask.usedBy]
+            }while(itemUserTask != previousItemUserTask)
         }
-        return false
+        return productIncrements
     }
-    // for(const recipe of recipes){
+    // 先不判断了，直接试一下
+    // for(const recipe of available_recipes){
     //     if(isIncrementingRecipe(recipe)){
     //         console.log(recipe)
     //         hasIncrementingRecipe = true
@@ -433,18 +485,20 @@ async function tryCraftItem(task, curIndex){
             craftingTable.position, bot.world)))
     }
     var success = false
-    var left = task.count
+    var requiredNumOfTargetItem = numTargetLacking
     var before
     do{
-        before = left
-        for(const recipe of recipes){
+        before = requiredNumOfTargetItem
+        for(const recipe of available_recipes){
+            // console.log(recipe.delta)
             if(!isIncrementingRecipe(recipe)) continue
             try{
                 console.log('尝试合成'+task.target)
                 console.log(recipe.delta)
+                // console.log(craftingTable)
                 await bot.craft(recipe, 1, craftingTable)
-                left -= recipe.result.count
-                if(left <= 0){
+                requiredNumOfTargetItem -= recipe.result.count
+                if(requiredNumOfTargetItem <= 0){
                     console.log('crafting item '+ task.target+' 成功')
                     success = true
                     break
@@ -455,34 +509,39 @@ async function tryCraftItem(task, curIndex){
             }
         }
         // 反复尝试所有recipe，直到再也做不了一次
-    }while(before > left && !success)
-    task.count = left
+    }while(before > requiredNumOfTargetItem && !success)
+    // task.count = requiredNumOfTargetItem
     if(success) return TASK_COMPLETED
     if(!success){
         console.log('合成不了，先收集更多材料吧')
-        task_stack.push(task)
-        recipes = bot.recipesAll(task.target, null, craftingTable)
-        for(const recipe of recipes){
-            if(!isIncrementingRecipe(recipe)) continue
+        const all_recipes = bot.recipesAll(task.target, null, craftingTable)
+        // console.log('总菜谱数量：'+ all_recipes.length)
+        for(const recipe of all_recipes){
+            // console.log(recipe.delta)
+            if(!isIncrementingRecipe(recipe)){
+                // console.log('跳过上述菜谱')
+                continue
+            }
             // 把每个任务加进任务栈。
             // 因为是“或”的关系，所以父任务都是parent
             // 但菜谱之中的各项item是“且”的关系的，父任务应该是其sibling
             var sibling = curIndex
             // 浮点除法
-            const times = task.count / recipe.result.count
+            const timesOfCrafting = Math.ceil(requiredNumOfTargetItem / recipe.result.count)
             for(var recipeItem of recipe.delta){
                 if(recipeItem.count > 0) continue
                 // TODO: 暂时不考虑metadata————直到找到能测试的地方
-                const tmp = task_stack.length
                 // 考虑背包中如果有，看数量是否足够
                 // 如果不够，就减去背包中该物品的数量
                 // 如果够，跳过
-                var numItems = Math.ceil(-recipeItem.count * times) 
-                const existing = bot.inventory.count(recipeItem.id)
-                if(existing >= numItems) continue
-                numItems -= existing
-                console.log('New task pushed: '+numItems+'个'+recipeItem.id)
-                task_stack.push(new Task(recipeItem.id, sibling, numItems))
+                var requiredNumOfItems = -recipeItem.count * timesOfCrafting
+                const existingNumOfItems = bot.inventory.count(recipeItem.id)
+                console.log('这个原料，需要'+requiredNumOfItems+'个，已经有'+existingNumOfItems+'个了')
+                if(existingNumOfItems >= requiredNumOfItems) continue
+                requiredNumOfItems -= existingNumOfItems
+                console.log('New task pushed: '+requiredNumOfItems+'个'+recipeItem.id)
+                const tmp = task_stack.length
+                task_stack.push(new Task(recipeItem.id, sibling, curIndex, requiredNumOfItems, true))
                 sibling = tmp
             }
         }
@@ -493,59 +552,128 @@ async function tryCraftItem(task, curIndex){
 const TASK_IN_PROGRESS = 0
 const TASK_COMPLETED = 1
 const TASK_FAILED = 2
+async function executeOneTask(task, totalNumRequired){
+    const curIndex = task_stack.length - 1
+    console.log('任务序号：'+curIndex)
+    // 不是背包中满足就够了的，我这是为箱子挖的
+    // const numAlreadyInInventory = bot.inventory.count(task.target)
+    // if(numAlreadyInInventory >= totalNumRequired){
+    //     console.log('背包中物品数量已经满足要求')
+    //     return TASK_COMPLETED
+    // }
+    // 任务执行方式：从箱子里拿
+    // 任务目标不动，通过箱子来计算需要执行的数量
+    // 即使任务没有完成，也不改任务目标
+    // 因为下次执行会再次计算
+    // TODO: 改成yield
+    const withChest = await getEnderChest(balanceEnderChest)
+    var numTargetLacking = await withChest(task.target, totalNumRequired)
+    if(numTargetLacking <= 0){
+        console.log('通过末影箱完成了任务')
+        return TASK_COMPLETED
+    }
+    var taskHasProgress = false
+    // task.type == mining
+    // 检查所有可以掉落该item的block，尝试挖掘每一个
+    console.log("尝试挖掘任务目标")
+    // TODO: 考虑挖掘失败的情况
+    // TODO: 如何判断挖掘数量？
+    var before = countInventory(task.target)
+    const lackingTools = await doCollectBlocks({
+        matching: (block)=>{
+            const drops = block.drops
+            if(drops == undefined) return false
+            // I'm just trying to get the ID!
+            for(const drop of drops){
+                if(drop.drop == undefined){
+                    if(drop == task.target) return true
+                    continue
+                }
+                const id = drop.drop.id
+                if(id == undefined){
+                    if(drop.drop == task.target) return true
+                    continue
+                }
+                if(id == task.target) return true
+            }
+            return false
+        },
+        // TODO: 一个方块可能掉落多个，或概率掉落物品
+        // 如燧石，红石，下界荧光块等。暂时假设每个方块稳定掉落一个
+        count: numTargetLacking,
+        maxDistance: 228
+    })
+    // console.log(lackingTools)
+    for(var tool of lackingTools){
+        console.log('将挖掘工具：'+tool+'加入任务')
+        task_stack.push(new Task(tool, curIndex, curIndex, 2, false))
+    }
+    // 后面可能还有炉子等方式，暂时不考虑
+    // 更新本次执行的剩余数量
+    // TODO: 判断挖掘数量
+    const firstEmptySlot = bot.inventory.firstEmptyInventorySlot()
+    const firstItem = bot.inventory.items[0]
+    bot.inventory.updateSlot(firstEmptySlot, firstItem)
+    console.log('空slot数为：'+bot.inventory.emptySlotCount())
+    numMined = countInventory(task.target) - before
+    numTargetLacking -= numMined
+    console.log('挖掘了'+numMined+'个，剩余应合成量：'+numTargetLacking)
+    // TODO: 熔炉
+    // TODO: 种植
+    // TODO: 战斗掉落
+    // TODO: 剪羊毛，装水，装岩浆，装牛奶，...
+    const result = await tryCraftItem(task, curIndex, numTargetLacking)
+    if(result == TASK_COMPLETED) return result
+    if(taskHasProgress) return TASK_IN_PROGRESS
+    return result
+}
 async function executeTasks(){
     while(task_stack.length > 0){
         const task = task_stack.pop()
         console.log('executing task '+ task.count +'个'+task.target)
         // TODO: 记录子任务成功情况
         task.numberOfExecution += 1
-        if(task.numberOfExecution > 4){
+        if(task.numberOfExecution > 2){
             console.log('任务卡住，已放弃')
             continue
         }
-        const curIndex = task_stack.length
-        console.log('任务序号：'+curIndex)
-        // task.type == mining
-        // 检查所有可以掉落该item的block，尝试挖掘每一个
-        console.log("检索方块中")
-        // TODO: 考虑挖掘失败的情况
-        // 如何判断挖掘数量？挖掘前数箱子里的个数，挖掘后再数。
-        const before = bot.inventory.count(task.target)
-        await doCollectBlocks({
-            matching: (block)=>{
-                const drops = block.drops
-                if(drops == undefined) return false
-                // I'm just trying to get the ID!
-                for(const drop of drops){
-                    if(drop.drop == undefined){
-                        if(drop == task.target) return true
-                        continue
-                    }
-                    const id = drop.drop.id
-                    if(id == undefined){
-                        if(drop.drop == task.target) return true
-                        continue
-                    }
-                    if(id == task.target) return true
+        task_stack.push(task)
+        // 执行时考虑中间的（沿parent而上直到used by）任务，和库存进行对比来计算应该执行的数量
+        var totalNumRequired = task.count
+        var ascendent = task_stack.at(task.parent)
+        var numNonConsuming = 0
+        // console.log(task_stack)
+        while(task_stack[ascendent.parent] != ascendent){
+            if(ascendent.target == task.target){
+                // 计算时考虑每个任务是否消耗性
+                // 其中所有消耗性任务的物品数量加起来
+                // 加上所有非消耗性任务中物品的最大值
+                if(ascendent.consuming){
+                    totalNumRequired += ascendent.count
+                }else if(numNonConsuming< ascendent.count){
+                    numNonConsuming = ascendent.count
                 }
-                return false
-            },
-            // TODO: 一个方块可能掉落多个，或概率掉落物品
-            // 如燧石，红石，下界荧光块等。暂时假设每个方块稳定掉落一个
-            count: task.count,
-            maxDistance: 228
-        })
-        await delay(1000)
-        const after = bot.inventory.count(task.target)
-        const numMined = after - before
-        // 后面可能还有炉子等方式，暂时不考虑
-        // 更新task的剩余数量
-        task.count -= numMined
-        console.log('挖掘了'+numMined+'个，剩余应合成量：'+task.count)
-        const result = await tryCraftItem(task, curIndex)
+            }
+            ascendent = task_stack[ascendent.parent]
+        }
+        totalNumRequired += numNonConsuming
+        const result = await executeOneTask(task, totalNumRequired)
         if(result == TASK_IN_PROGRESS) {
-            console.log('crafting 执行子任务')
+            console.log('执行获取合成原料的子任务')
             continue
+        }
+        if(result == TASK_FAILED) {
+            console.log('任务终止')
+            task_stack.pop()
+            continue
+        }
+        // 任务完成后，再次前往末影箱进行结算
+        // TODO: 等到数量更新后再问
+        const withChest = await getEnderChest(balanceEnderChest)
+        const numTargetLacking = await withChest(task.target, totalNumRequired)
+        if(numTargetLacking > 0){
+            console.log('任务完成了个屁')
+            // continue
         }
         // 现在任务成功了。把父任务的后代任务全部删了。
         const targetLength = task.parent +1
@@ -555,11 +683,13 @@ async function executeTasks(){
     }
 }
 class Task{
-    constructor(target, parentIndex, count = 1){
+    constructor(target, parentIndex, usedBy, count = 1, consuming = true){
         this.target = target // itemType(number)
         this.parent = parentIndex // any element with higher index are descedents
+        this.usedBy = usedBy //这个item的使用者
         this.count = count // quantity of target item
         this.numberOfExecution = 0
+        this.consuming = consuming // if not consuming, check inventory for existance
     }
 }
 // 任务树，任何一个分支成功都算成功
@@ -569,44 +699,78 @@ const itemIndex = {
     'crafting_table': 58,
     'wooden_pickaxe': 270,
     'stone_pickaxe': 274,
+    'stone_sword': 272,
+    'stone_axe': 275,
+    'bed': 355,
+    'furnace': 61,
+    'diamond_ore': 56,
+    'redstone_ore': 73,
+    'iron_ore': 15,
+    'emerald_ore': 129,
+    'obsidian': 49,
+    'cobblestone': 4,
     'dirt': 3
 }
 // TODO: 任务搜索中加入best_harvet_tool，自动获取挖掘工具
 const sustainItems = {
-    // 'wooden_pickaxe': 0,
-    // 0表示现在一个都没有，希望无中生有
-    'stone_pickaxe': 0,
-    'dirt': 32
+    // 排在后面的优先执行
+    'bed': 1,
+    'furnace': 1,
+    'iron_ore': 4,
+    // 'stone_pickaxe': 1,
+    // TODO: auto get dirt on lacking scarffolding block
+    'cobblestone': 1,
+    // 'stone_axe': 1,
+    'dirt': 56,
+    // 'wooden_pickaxe': 1,
+    // 0: 一次性用具，也就是持续用具的依赖
+}
+async function doBalanceEnderChest(item, numShouldInInventory, chest){
+    const itemID = itemIndex[item]
+    var expected = numShouldInInventory * 2
+    const containerBefore = chest.containerCount(itemID)
+    const inventoryBefore = chest.count(itemID)
+    const existing = inventoryBefore + containerBefore
+// 数背包里数量
+    console.log(
+        '箱子里有'+containerBefore+'个，背包里有'+inventoryBefore+'个，应该有'+numShouldInInventory+'个')
+    // TODO: 假设两边的空间都总是足够
+    // 若多，放进去
+    if(inventoryBefore > numShouldInInventory){
+        console.log('应该放进去'+(inventoryBefore - numShouldInInventory)+'个')
+        await chest.deposit(itemID, null, inventoryBefore - numShouldInInventory)
+    }else if (inventoryBefore < numShouldInInventory){
+        // 若少，拿出来
+        var numOfItemsToWithdraw = numShouldInInventory - inventoryBefore
+        console.log('应该拿出来'+numOfItemsToWithdraw+'个')
+        if(numOfItemsToWithdraw > containerBefore) {
+            numOfItemsToWithdraw = containerBefore
+            console.log('实际拿出来'+numOfItemsToWithdraw+'个')
+        }
+        await chest.withdraw(itemID, null, numOfItemsToWithdraw)
+    }else{
+        console.log('不拿也不放')
+    }
+    return expected - existing 
+}
+function balanceEnderChest(chest){
+    const closure = (item, numShouldInInventory) =>{
+        return doBalanceEnderChest(item, numShouldInInventory, chest)
+    }
+    return closure
 }
 async function getTasksFromEnderChest(chest){
     for(const sustainItem in sustainItems){
         // 对于每个指定物品，数总数量
-        const numTaken = sustainItems[sustainItem]
-        var expected = numTaken * 4
-        if(expected <= 0) expected = 1
+        const numShouldInInventory = sustainItems[sustainItem]
         const itemID = itemIndex[sustainItem]
-        const containerBefore = chest.containerCount(itemID)
-        const inventoryBefore = chest.count(itemID)
-        const existing = inventoryBefore + containerBefore
-        // 缺好多，加入任务
-        if(existing < expected){
-            task_stack.push(new Task(itemID, -1, expected - existing))
-        }
         // 使得背包里数量达标
-        // 数背包里数量
-        console.log(
-            '箱子里有'+containerBefore+'个，背包里有'+inventoryBefore+'个，应该有'+numTaken+'个')
-        // TODO: 假设两边的空间都总是足够
-        // 若多，放进去
-        if(inventoryBefore > numTaken){
-            console.log('应该放进去'+(inventoryBefore - numTaken)+'个')
-            await chest.deposit(itemID, null, inventoryBefore - numTaken)
-        }else if (inventoryBefore < numTaken){
-            // 若少，拿出来
-            console.log('应该拿出来'+(numTaken - inventoryBefore)+'个')
-            await chest.withdraw(itemID, null, numTaken - inventoryBefore)
-        }else{
-            console.log('不拿也不放')
+        const balanceWithEnderChest = balanceEnderChest(chest)
+        const numLacking = await balanceWithEnderChest(sustainItem, numShouldInInventory)
+        // 缺好多，加入任务
+        if(numLacking > 0){
+            const parent = task_stack.length
+            task_stack.push(new Task(itemID, parent, parent, numLacking))
         }
     }
 }
@@ -626,26 +790,23 @@ async function sustain(){
 }
 async function develop() {
     await collectDroppedItems()
+    // sustain 改名执行item获取
+    // 通过其他过程来提出item获取请求
+    // 如：获取挖掘工具，获取scaffolding blocks，获取农作工具，获取战斗工具
+    // 各过程间优先顺序需要进一步考虑
     await sustain()
     await farm()
-    // await collectBlocks([
-    //     'wood',
-    //     'log',
-    //     'jungle', 'oak', 'spruce', 'birch', 'acacia', 
-    //     // 'iron',
-    //     'plank', 
-    //     // 'sand', 
-    //     // 'leaves', 
-    //     'wool', 
-    //     // 'flower', 'mushroom'
-    //     // , 'stone'
-    //     // , 'grass'
-    // // , 'dirt'
-    // ])
 }
+var kicked = false
 async function loop(){
     console.log("HP: " + bot.health+"/20, food: "+bot.food+'/20')
     console.log("Saturation: " + bot.foodSaturation+"/5, oxygen: "+bot.oxygenLevel+'/20')
+    if(kicked){
+        // TODO: 手动下线
+        await delay(5000)
+        login()
+        return
+    }
     await emptyInventory()
     if(isNatural()){
         await develop()
@@ -679,22 +840,53 @@ async function doCollectBlocks(options, goal = null){
             goal_reached = true
         })
     }
+    function breakInfiniteLoop(block){
+        // bot.pathfinder.stop()
+        // unavailable_block_coords.push(block)
+    }
+    var epoch = 0
+    var requiredTools = new Set()
     for(var block of blockList){
         const p = block.position
         console.log('Collecting block: '+ p + ' '+ block.name)
         if(goal != null){
+            setTimeout(()=>bot.emit('routing_timeout'+epoch, block), 60123)
+            bot.once('routing_timeout'+epoch, breakInfiniteLoop)
             await tryGotoBlockPosition(bot.pathfinder.goto(
                 new goals.GoalBlock(p.x, p.y, p.z)))
             // await delay(3000)
+            bot.removeListener('routing_timeout'+epoch, breakInfiniteLoop)
+            epoch += 1
             if(goal_reached) break
+        }else if(block.harvestTools != undefined){
+            console.log(block.name+'的挖掘工具是:')
+            var hasAnyTool = false
+            for(tool in block.harvestTools){
+                // console.log(tool)
+                const existingNum = bot.inventory.count(tool)
+                console.log(existingNum)
+                if(existingNum > 1){
+                    hasAnyTool = true
+                    break
+                }
+            }
+            if(!hasAnyTool){
+                console.log('缺少挖掘这个方块的工具。将工具加入任务')
+                for(tool in block.harvestTools){
+                    requiredTools.add(tool)
+                }
+            }
         }
     }
     if(goal == null){
-        await tryGotoBlockPosition(bot.collectBlock.collect(blockList))
+        // TODO: 任意一个方块缺挖掘工具，其他的都不挖了吗？
+        if(requiredTools.size <= 0){
+            await tryGotoBlockPosition(bot.collectBlock.collect(blockList))
+        }
     } else if(!goal_reached){
         wander()
     }
-    return blockList.length
+    return requiredTools
 }
 async function collectBlocks(words, goal = null){
     await doCollectBlocks({
@@ -702,7 +894,7 @@ async function collectBlocks(words, goal = null){
             for(var index in words){
                 const word = words[index]
                 const p = block.position
-                if(block.name.includes(word)){
+                if(block.name.includes(word) && isBlockAvailable(block)){
                     // console.log(block.name)
                     return true
                 }
@@ -715,7 +907,7 @@ async function collectBlocks(words, goal = null){
 }
 
 bot.on('chat', (username, message) => {
-    if (username === bot.username) return
+    // if (username === bot.username) return
     // bot.chat(message)
     console.log(username+':'+message)
   })
@@ -728,5 +920,9 @@ bot.once('spawn', () => {
     mineflayerViewer(bot, { port: port, firstPerson: true })
     enterWorld()
 })
-bot.on('kicked', console.log)
-bot.on('error', console.log)
+async function handleError(msg){
+    console.log(msg)
+    kicked = true
+}
+bot.on('kicked', handleError)
+bot.on('error', handleError)
